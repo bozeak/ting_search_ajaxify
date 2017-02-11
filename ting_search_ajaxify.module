@@ -1,0 +1,454 @@
+<?php
+
+/**
+ * @file
+ * Ting search ajaxification.
+ */
+
+/**
+ * Implements hook_page_build().
+ */
+function ting_search_ajaxify_page_build(&$page) {
+  drupal_add_js(drupal_get_path('module', 'ting_search_ajaxify') . '/js/ting_search_ajaxify.js',
+    array('weight' => 1000)
+  );
+}
+
+/**
+ * Implements hook_menu().
+ */
+function ting_search_ajaxify_menu() {
+  $items = array();
+
+  $items['ajaxify/search/%'] = array(
+    'title' => 'TSA',
+    'page callback' => 'ting_search_ajaxify_search_block_ajax_callback',
+    'page arguments' => array(2),
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function ting_search_ajaxify_form_search_block_form_alter(&$form, &$form_state, $form_id) {
+  $current_path = current_path();
+  $query = explode('/', $current_path);
+
+  if (preg_match('/search\\/ting/', $current_path)) {
+    $form['actions']['submit']['#ajax'] = array(
+      'callback' => 'ting_search_ajaxify_search_block_ajax_callback',
+      'wrapper' => 'search-results-wrapper',
+      'method' => 'replace',
+      'effect' => 'fade',
+      'path' => 'ajaxify/search/' . $query[2],
+      'progress' => array('type' => 'throbber', 'message' => ''),
+    );
+
+//    $form['#attached']['js'] = drupal_add_js(drupal_get_path('module', 'ting_search_ajaxify') . '/js/ting_search_ajaxify.js',
+//      array('weight' => 1000)
+//    );
+  }
+}
+
+function ting_search_ajaxify_search_block_ajax_callback($key) {
+  $commands = array();
+//  $key = $form['search_block_form']['#value'];
+//  $key = $_POST['search_block_form'];
+
+  $path_c = drupal_get_query_parameters();
+  // Getting search results.
+  $rendered = _ting_search_ajaxify_render_search_results($key, $path_c);
+
+  // Getting counts.
+  module_load_include('client.inc', 'ting');
+  $search_result_obj = drupal_static('ting_search_results');
+
+  $count_results = isset($search_result_obj->numTotalObjects) ? (int) $search_result_obj->numTotalObjects : 0;
+  $string = format_plural($count_results > 1 ? $count_results : 1, 'Result', 'Results');
+  $content = array(
+    '#prefix' => '<h1 class="page-title">',
+    '#suffix' => '</h1>',
+    '#markup' => t('Search result <span class="js-count" data-js-count="!count" class="search-field-in-content--amount">(!count !string)</span>', array(
+      '!count' => $count_results,
+      '!string' => $string,
+    )),
+  );
+
+  $facetbrowser = _ting_search_ajaxify_render_facetbrowser();
+
+
+//  $commands[] = ajax_command_replace('.pane-search-result-count .pane-content', render($content));
+  $commands[] = ajax_command_replace('#search-count', render($content));
+
+  $commands[] = ajax_command_replace('.js-facet-browser-toggle', render($facetbrowser->content));
+
+  $commands[] = ajax_command_insert('#search-results-wrapper',
+    '<div id="search-results-wrapper" class="search-results-wrapper">' . render($rendered->content) . '</div>');
+
+  $page = array('#type' => 'ajax', '#commands' => $commands);
+
+//  return $page;
+//  drupal_add_js();
+  ajax_deliver($page);
+//  drupal_exit();
+}
+
+/**
+ * Implements hook_preprocess_HOOK().
+ */
+function ting_search_ajaxify_preprocess_panels_pane(&$variables) {
+  if ($variables['pane']->type == 'search_result') {
+    $wrapper = array(
+      '#type' => 'container',
+      '#attributes' => array(
+        'class' => array('search-results-wrapper'),
+        'id' => array('search-results-wrapper'),
+      ),
+    );
+
+    $content = drupal_render($wrapper);
+    $variables['content'] = $content;
+
+    variable_set('ting_search_results_conf', $variables['pane']->configuration);
+  }
+
+  if ($variables['pane']->type == 'ding_facetbrowser' && $variables['pane']->panel == 'left_sidebar') {
+    $wrapper = array(
+      '#type' => 'container',
+      '#attributes' => array(
+        'class' => array('js-facet-browser-toggle'),
+        'id' => array('js-facet-browser-toggle'),
+      ),
+    );
+
+    $variables['content'] = drupal_render($wrapper);
+  }
+
+  if ($variables['pane']->type == 'search_result_count') {
+    $wrapper = array(
+      '#prefix' => '<h1 class="page-title" id="search-count">',
+      '#suffix' => '</h1>',
+      '#markup' => t('Search result'),
+    );
+
+    $variables['content'] = $wrapper;
+  }
+}
+
+function _ting_search_ajaxify_render_search_results($keys = NULL, $conditions = NULL) {
+  $conf = variable_get('ting_search_results_conf', array());
+
+  $search_info = search_get_info();
+  if (empty($search_info[$conf['type']])) {
+    return;
+  }
+  $info = $search_info[$conf['type']];
+//
+//  $conditions = NULL;
+//  if (isset($info['conditions_callback']) && function_exists($info['conditions_callback'])) {
+//    // Build an optional array of more search conditions.
+//    $conditions = $info['conditions_callback']($keys);
+//  }
+//
+//  // Display nothing at all if no keywords were entered.
+//  if (empty($keys) && empty($conditions)) {
+//    if (!empty($conf['override_no_key'])) {
+//      $block = new stdClass();
+//      $block->title = $conf['no_key_title'];
+//      $block->content = check_markup($conf['no_key'], $conf['no_key_format'], FALSE);
+//      return $block;
+//    }
+//    return;
+//  }
+//
+//  // Build the content type block.
+  $block = new stdClass();
+  $block->module = 'search';
+  $block->delta = 'result';
+
+//  $results = '';
+//  // Only search if there are keywords or non-empty conditions.
+//  if ($keys || !empty($conditions)) {
+//    // Collect the search results.
+//    $results = search_data($keys, $info['module'], $conditions);
+//  }
+//
+//  if (!empty($conf['log'])) {
+//    // Log the search keys:
+//    watchdog('search', 'Searched %type for %keys.', array('%keys' => $keys, '%type' => $info['title']), WATCHDOG_NOTICE, l(t('results'), $_GET['q']));
+//  }
+//
+//  if (!empty($results['#results'])) {
+//    // Get message limit and raw data well search results.
+//    $limit = variable_get('ting_search_result_message_limit', 100);
+//    $search_result = drupal_static('ting_search_results');
+//
+//    // Set message.
+//    $message = '';
+//
+//    $frequency_rank = array(
+//      'rank_main_title' => t('Title'),
+//      'rank_creator' => t('Creator'),
+//      'rank_subject' => t('Subject'),
+//    );
+//    if (isset($search_result) && in_array($search_result->sortUsed, array_keys($frequency_rank))) {
+//      $msg = t('Records are sorted by %sortUsed . Select another sort if it is not suited', array('%sortUsed' => $frequency_rank[$search_result->sortUsed]));
+//      $message .= '<div class="messages status">' . $msg . '</div>';
+//    }
+//
+//
+//    if (isset($search_result) && $limit < $search_result->numTotalObjects) {
+//      $msg = t('Your search gave more than %s results. Try to search more specific or use the facets to filter the result.');
+//      $msg = sprintf($msg, $limit);
+//      $message .= '<div class="messages search-field-in-content--message">' . $msg . '</div>';
+//    }
+//
+//    $block->title = t('Search results');
+//    $block->content = $message . theme('ting_search_results', array('results' => $results['#results'], 'module' => $conf['type']));
+//  }
+//  else {
+//    if (empty($conf['override_empty'])) {
+//      $block->title = t('Your search yielded no results');
+//      $block->content = search_help('search#noresults', drupal_help_arg());
+//    }
+//    else {
+//      $block->title = $conf['empty_title'];
+//      $block->content = check_markup($conf['empty'], $conf['empty_format'], FALSE);
+//    }
+//  }
+//
+//  return $block;
+
+
+
+  // Use static variable to ensure that this is only executed once.
+  $results = &drupal_static(__FUNCTION__);
+  if (!isset($results)) {
+    $results = array();
+    $options = array();
+    $results = array();
+    $facet_array = array();
+    $query = '(' . _ting_search_quote($keys) . ')';
+    $options['numFacets'] = variable_get('ting_search_number_of_facets', 25);
+
+    // Extend query with selected facets.
+    if (isset($conditions['facets']) && $conditions['facets'] != NULL) {
+      $facets = $conditions['facets'];
+      foreach ($facets as $facet) {
+        $facet = explode(':', $facet, 2);
+        if ($facet[0]) {
+          $facet_array[] = $facet[0] . '="' . rawurldecode($facet[1]) . '"';
+        }
+      }
+
+      $query .= ' AND ' . implode(' AND ', $facet_array);
+    }
+
+    $search_result = NULL;
+    try {
+      $page = pager_find_page();
+
+      // Set results per page.
+      $results_per_page = variable_get('ting_search_results_per_page', 10);
+      if (!empty($conditions['size'])) {
+        $results_per_page = $conditions['size'];
+      }
+
+      // Set sort order.
+      if (!empty($conditions['sort'])) {
+        $options['sort'] = $conditions['sort'];
+      }
+
+      module_load_include('client.inc', 'ting');
+      $search_result = ting_do_search($query, $page + 1, $results_per_page, $options);
+      if (isset($search_result->collections)) {
+        $search_result->search_key = $keys;
+
+        // So we got the total amount of results, but the joker here is that
+        // we have no clue how many collections we got.
+        // Rounded up, this will display 'one more page' if $search-result->more
+        // is true.
+        $total_results = ($page + 1) * $results_per_page + ($search_result->more ? 1 : 0);
+
+        pager_default_initialize($total_results, $results_per_page);
+
+        foreach ($search_result->collections as &$collection) {
+          $build = ting_collection_view($collection, 'teaser');
+          $uri = entity_uri('ting_collection', $collection);
+          $results[] = array(
+            'link' => url($uri['path'], $uri['options']),
+            'type' => '',
+            'title' => $collection->title,
+            'user' => '',
+            'date' => '',
+            'snippet' => drupal_render($build),
+          );
+        }
+      }
+    }
+    catch (TingClientException $e) {
+      watchdog_exception('ting_search', $e);
+      $results = array();
+    }
+
+    // Save search result for usage by facet modules etc.
+    $ting_search_results = &drupal_static('ting_search_results');
+    $ting_search_results = $search_result;
+
+    // Add support for facet api.
+    if (module_exists('ding_facets')) {
+      // @todo ITK Aarhus finish implementation of facet api to use a standard
+      // facet module, that allows usage of modules from D.O. to improved facet
+      // usage.
+      $adapter = facetapi_adapter_load('ding_facets');
+      if ($adapter) {
+        $adapter->addActiveFilters($query);
+      }
+    }
+  }
+
+
+//  $results = '';
+  // Only search if there are keywords or non-empty conditions.
+  if ($keys || !empty($conditions)) {
+    // Collect the search results.
+    $results = search_data($keys, $info['module'], $conditions);
+  }
+
+  if (!empty($conf['log'])) {
+    // Log the search keys:
+    watchdog('search', 'Searched %type for %keys.', array('%keys' => $keys, '%type' => $info['title']), WATCHDOG_NOTICE, l(t('results'), $_GET['q']));
+  }
+
+  if (!empty($results['#results'])) {
+    // Get message limit and raw data well search results.
+    $limit = variable_get('ting_search_result_message_limit', 100);
+    $search_result = drupal_static('ting_search_results');
+
+    // Set message.
+    $message = '';
+
+    $frequency_rank = array(
+      'rank_main_title' => t('Title'),
+      'rank_creator' => t('Creator'),
+      'rank_subject' => t('Subject'),
+    );
+    if (isset($search_result) && in_array($search_result->sortUsed, array_keys($frequency_rank))) {
+      $msg = t('Records are sorted by %sortUsed . Select another sort if it is not suited', array('%sortUsed' => $frequency_rank[$search_result->sortUsed]));
+      $message .= '<div class="messages status">' . $msg . '</div>';
+    }
+
+
+    if (isset($search_result) && $limit < $search_result->numTotalObjects) {
+      $msg = t('Your search gave more than %s results. Try to search more specific or use the facets to filter the result.');
+      $msg = sprintf($msg, $limit);
+      $message .= '<div class="messages search-field-in-content--message">' . $msg . '</div>';
+    }
+
+    $block->title = t('Search results');
+    $block->content = $message . theme('ting_search_results', array('results' => $results['#results'], 'module' => $conf['type']));
+  }
+  else {
+    if (empty($conf['override_empty'])) {
+      $block->title = t('Your search yielded no results');
+      $block->content = search_help('search#noresults', drupal_help_arg());
+    }
+    else {
+      $block->title = $conf['empty_title'];
+      $block->content = check_markup($conf['empty'], $conf['empty_format'], FALSE);
+    }
+  }
+
+  return $block;
+
+}
+
+function _ting_search_ajaxify_render_facetbrowser() {
+  $block_content = FALSE;
+  $content_in_facet = FALSE;
+  $executed_search_module = FALSE;
+  $block = new stdClass();
+
+  $block->module = 'ding_facetbrowser';
+  $block->delta  = 'ding_facetbrowser';
+
+  $facetbrowser_path = drupal_get_path('module', 'ding_facetbrowser');
+  $ajaxify_path = drupal_get_path('module', 'ting_search_ajaxify');
+  drupal_add_library('system', 'drupal.ajax');
+  drupal_add_js($facetbrowser_path . '/js/jquery.cookie.min.js');
+//  drupal_add_js($facetbrowser_path . '/js/ding_facetbrowser.js');
+  drupal_add_js($ajaxify_path. '/js/facetbrowser.js');
+  drupal_add_js(array(
+    'ding_facetbrowser' => array(
+      'selector' => '.js-facet-browser-toggle',
+      'number_of_terms' => variable_get('ding_facetbrowser_number_of_terms', 5),
+    ),
+  ), 'setting');
+
+  // Invoke ding_facetbrowser() from executed search module.
+  $executed_search_module = 'ting_search';
+
+  if (is_string($executed_search_module)) {
+    $results = module_invoke($executed_search_module, 'ding_facetbrowser');
+    if (is_object($results)) {
+      foreach ($results->facets as $result) {
+        if (count($result->terms) == TRUE) {
+          $content_in_facet = TRUE;
+          break;
+        }
+      }
+      if ($content_in_facet === TRUE || $results->show_empty == TRUE) {
+        $block_content = theme('facetbrowser', array($results->facets, (!empty($results->searchkey) ? $results->searchkey : NULL)));
+      }
+    }
+    drupal_add_js(array(
+      'ding_facetbrowser' => array(
+        'query' => $results->searchkey,
+      ),
+    ), 'setting');
+
+    $block->title = t('Ding Facetbrowser');
+    $block->content = '<div class="js-facet-browser-toggle" id="js-facet-browser-toggle">' . $block_content . '</div>';
+//    $block->content = $block_content;
+    return $block;
+  }
+}
+
+
+/**
+ * Implements hook_url_outbound_alter().
+ */
+//function ting_search_ajaxify_url_outbound_alter(&$path, &$options, $original_path) {
+////  if (preg_match('/^ajaxify/', $path)) {
+////    $path = preg_replace('/ajaxify/', 'search/ting', $path, -1);
+////  }
+//  if (preg_match('/ajaxify\\/search/', $path)) {
+//    $path = preg_replace('/ajaxify\\/search/', 'search/ting', $path, -1);
+//  }
+//}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+//function ting_search_ajaxify_form_ding_facetbrowser_form_alter(&$form, &$form_state, $form_id) {
+//  //$action = $form['#action'];
+//  //$query = explode('?', $action);
+//  //  if (preg_match('/ting-ajaxify\/facets/', $action)) {
+//  //    $new = preg_replace('/ting-ajaxify/facets/', 'search/ting', $action, -1);
+//  //    $form['#action'] = $new;
+//  //  }
+//
+//  $action_string = "/search/ting/{$form['search_key']['#value']}";
+//
+////  if (!empty($query[1])) {
+////    $action_string = $action_string . '?' . $query[1];
+////  }
+//
+////  $new = url("ting/search/{$form['search_key']['#value']}?{$query[1]}");
+//
+//  $form['#action'] = $action_string;
+//}
