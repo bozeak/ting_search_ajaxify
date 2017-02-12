@@ -6,12 +6,10 @@
  */
 
 /**
- * Implements hook_page_build().
+ * Implements hook_init().
  */
-function ting_search_ajaxify_page_build(&$page) {
-  drupal_add_js(drupal_get_path('module', 'ting_search_ajaxify') . '/js/ting_search_ajaxify.js',
-    array('weight' => 1000)
-  );
+function ting_search_ajaxify_init() {
+  drupal_add_js(drupal_get_path('module', 'ting_search_ajaxify') . '/js/ajax_pager.js');
 }
 
 /**
@@ -20,48 +18,65 @@ function ting_search_ajaxify_page_build(&$page) {
 function ting_search_ajaxify_menu() {
   $items = array();
 
-  $items['ajaxify/search/%'] = array(
-    'title' => 'TSA',
-    'page callback' => 'ting_search_ajaxify_search_block_ajax_callback',
-    'page arguments' => array(2),
-    'access arguments' => array('access content'),
+  $items['ajaxify'] = array(
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ting_search_ajaxify_form_alter'),
+    'delivery callback' => 'ajax_deliver',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['ajaxify/paginate'] = array(
+    'page callback' => 'ting_search_ajaxify_pagination_callback',
+    'page arguments' => array(),
+    'delivery callback' => 'ajax_deliver',
+    'access callback' => TRUE,
     'type' => MENU_CALLBACK,
   );
 
   return $items;
 }
 
+function ting_search_ajaxify_pagination_callback() {
+  $qp = pager_get_query_parameters();
+  print_r($qp);
+  $commands = array();
+
+
+  $results = ting_search_search_execute();
+
+}
+
+
 /**
- * Implements hook_form_FORM_ID_alter().
+ * Implements hook_form_alter().
  */
-function ting_search_ajaxify_form_search_block_form_alter(&$form, &$form_state, $form_id) {
-  $current_path = current_path();
-  $query = explode('/', $current_path);
+function ting_search_ajaxify_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'search_block_form') {
+    $current_path = current_path();
 
-  if (preg_match('/search\\/ting/', $current_path)) {
-    $form['actions']['submit']['#ajax'] = array(
-      'callback' => 'ting_search_ajaxify_search_block_ajax_callback',
-      'wrapper' => 'search-results-wrapper',
-      'method' => 'replace',
-      'effect' => 'fade',
-      'path' => 'ajaxify/search/' . $query[2],
-      'progress' => array('type' => 'throbber', 'message' => ''),
-    );
-
-//    $form['#attached']['js'] = drupal_add_js(drupal_get_path('module', 'ting_search_ajaxify') . '/js/ting_search_ajaxify.js',
-//      array('weight' => 1000)
-//    );
+//    $query = explode('/', $current_path);
+    if (preg_match('/search\\/ting/', $current_path)) {
+      $form['#submit'] = array();
+      $form['actions']['submit']['#id'] = 'search-submit-button';
+      $form['actions']['submit']['#ajax'] = array(
+        'callback' => 'ting_search_ajaxify_search_block_ajax_callback',
+        'wrapper' => 'search-results-wrapper',
+//        'event' => 'onload',
+      );
+    }
   }
 }
 
-function ting_search_ajaxify_search_block_ajax_callback($key) {
+function ting_search_ajaxify_search_block_ajax_callback($form, &$form_state, $fsd) {
   $commands = array();
-//  $key = $form['search_block_form']['#value'];
-//  $key = $_POST['search_block_form'];
+  drupal_add_library('system', 'drupal.ajax');
 
-  $path_c = drupal_get_query_parameters();
   // Getting search results.
-  $rendered = _ting_search_ajaxify_render_search_results($key, $path_c);
+
+  print_r($fsd);
+  $key = $form_state['values']['search_block_form'];
+  $rendered = _ting_search_ajaxify_render_search_results($key);
 
   // Getting counts.
   module_load_include('client.inc', 'ting');
@@ -77,24 +92,18 @@ function ting_search_ajaxify_search_block_ajax_callback($key) {
       '!string' => $string,
     )),
   );
-
+//
   $facetbrowser = _ting_search_ajaxify_render_facetbrowser();
-
-
+//
+//
 //  $commands[] = ajax_command_replace('.pane-search-result-count .pane-content', render($content));
   $commands[] = ajax_command_replace('#search-count', render($content));
-
+//
   $commands[] = ajax_command_replace('.js-facet-browser-toggle', render($facetbrowser->content));
 
-  $commands[] = ajax_command_insert('#search-results-wrapper',
-    '<div id="search-results-wrapper" class="search-results-wrapper">' . render($rendered->content) . '</div>');
+  $commands[] = ajax_command_replace('#search-results-wrapper', '<div id="search-results-wrapper" class="search-results-wrapper">' . render($rendered->content) . '</div>');
 
-  $page = array('#type' => 'ajax', '#commands' => $commands);
-
-//  return $page;
-//  drupal_add_js();
-  ajax_deliver($page);
-//  drupal_exit();
+  return array('#type' => 'ajax', '#commands' => $commands);
 }
 
 /**
@@ -380,8 +389,8 @@ function _ting_search_ajaxify_render_facetbrowser() {
   $ajaxify_path = drupal_get_path('module', 'ting_search_ajaxify');
   drupal_add_library('system', 'drupal.ajax');
   drupal_add_js($facetbrowser_path . '/js/jquery.cookie.min.js');
-//  drupal_add_js($facetbrowser_path . '/js/ding_facetbrowser.js');
-  drupal_add_js($ajaxify_path. '/js/facetbrowser.js');
+  drupal_add_js($facetbrowser_path . '/js/ding_facetbrowser.js');
+//  drupal_add_js($ajaxify_path. '/js/facetbrowser.js');
   drupal_add_js(array(
     'ding_facetbrowser' => array(
       'selector' => '.js-facet-browser-toggle',
@@ -417,38 +426,3 @@ function _ting_search_ajaxify_render_facetbrowser() {
     return $block;
   }
 }
-
-
-/**
- * Implements hook_url_outbound_alter().
- */
-//function ting_search_ajaxify_url_outbound_alter(&$path, &$options, $original_path) {
-////  if (preg_match('/^ajaxify/', $path)) {
-////    $path = preg_replace('/ajaxify/', 'search/ting', $path, -1);
-////  }
-//  if (preg_match('/ajaxify\\/search/', $path)) {
-//    $path = preg_replace('/ajaxify\\/search/', 'search/ting', $path, -1);
-//  }
-//}
-
-/**
- * Implements hook_form_FORM_ID_alter().
- */
-//function ting_search_ajaxify_form_ding_facetbrowser_form_alter(&$form, &$form_state, $form_id) {
-//  //$action = $form['#action'];
-//  //$query = explode('?', $action);
-//  //  if (preg_match('/ting-ajaxify\/facets/', $action)) {
-//  //    $new = preg_replace('/ting-ajaxify/facets/', 'search/ting', $action, -1);
-//  //    $form['#action'] = $new;
-//  //  }
-//
-//  $action_string = "/search/ting/{$form['search_key']['#value']}";
-//
-////  if (!empty($query[1])) {
-////    $action_string = $action_string . '?' . $query[1];
-////  }
-//
-////  $new = url("ting/search/{$form['search_key']['#value']}?{$query[1]}");
-//
-//  $form['#action'] = $action_string;
-//}
